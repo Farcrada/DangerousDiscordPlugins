@@ -1,8 +1,8 @@
 /**
  * @name MoveAllVoiceUsers
  * @author Farcrada
- * @version 0.9.5
- * @description Moves all users in a particular voice chat.
+ * @version 0.9.6
+ * @description Moves all users in a particular voice chat. This plugin works directly with the Discord API. As such there is a reasonable chance for a selfbotting ban.
  * 
  * @website https://github.com/Farcrada/DangerousDiscordPlugins
  * @source https://github.com/Farcrada/DangerousDiscordPlugins/blob/master/Move-All-Voice-Users/MoveAllVoiceUsers.plugin.js
@@ -14,15 +14,13 @@ const config = {
     info: {
         name: "Move All Voice Users",
         id: "MoveAllVoiceUsers",
-        description: "Moves all users in a particular voice chat.",
-        version: "0.9.5",
+        description: "Moves all users in a particular voice chat. This plugin works directly with the Discord API. As such there is a reasonable chance for a selfbotting ban.",
+        version: "0.9.6",
         author: "Farcrada",
         updateUrl: "https://raw.githubusercontent.com/Farcrada/DangerousDiscordPlugins/master/Move-All-Voice-Users/MoveAllVoiceUsers.plugin.js"
     },
     constants: {
-        apiAlertCount: 5,
-        setChannelDelay: 100,
-        delayMultiplication: 5
+        setChannelDelay: 250
     }
 }
 
@@ -73,16 +71,19 @@ class MoveAllVoiceUsers {
 
     initialize() {
         //Since this plugin is in a serious greyarea concerning selfbotting,
-        //this error will show up everytime the plugin starts.
-        BdApi.alert("Selfbotting Warning",
-            //Neat thing about `` is that it is very literal.
-            //A new line or spaces are represented as is,
-            //this removes the need for \r, \n and \t
-            `This plugin (${config.info.name}) borders the line of self botting (i.e. banned from Discord). Small amounts of people (< 5) should not pose an issue if not abused.
+        //this error will show up the first time the plugin starts.
+        if (!BdApi.loadData(config.info.id, "warningShown")) {
+            BdApi.saveData(config.info.id, "warningShown", true);
+            BdApi.alert("Selfbotting Warning",
+                //Neat thing about `` is that it is very literal.
+                //A new line or spaces are represented as is,
+                //this removes the need for \r, \n and \t
+                `This plugin (${config.info.name}) borders the line of self botting (i.e. banned from Discord). Small amounts of people (< 5) should not pose an issue if not abused.
 
 However, the bigger the amount the bigger the responsibility. A delay has been build in, but that is no guarantee.
 
 You have been warned.`);
+        }
 
         //Guild context menu.
         this.guildUserContextMenus = BdApi.findModule(m => m?.default?.displayName === "GuildChannelUserContextMenu");
@@ -90,14 +91,14 @@ You have been warned.`);
 
         //We only need select functions; spread out over several stores
         this.hasPermission = BdApi.findModuleByProps("getHighestRole").can;
+        this.getGuild = BdApi.findModuleByProps("getGuild").getGuild;
         this.setChannel = BdApi.findModuleByProps("setChannel").setChannel;
         this.getChannel = BdApi.findModuleByProps("getChannel", "getDMFromUserId").getChannel;
         this.getChannels = BdApi.findModuleByProps("getChannels").getChannels;
-        this.getGuild = BdApi.findModuleByProps("getGuild").getGuild;
         this.getVoiceChannelId = BdApi.findModuleByProps("getVoiceChannelId").getVoiceChannelId;
         this.getVoiceStatesForChannel = BdApi.findModuleByProps("getVoiceStatesForChannel").getVoiceStatesForChannel;
 
-        //Types
+        //Permission types
         this.DiscordPermissionsTypes = BdApi.findModuleByProps("Permissions").Permissions;
 
         //Context menu
@@ -184,29 +185,36 @@ You have been warned.`);
         }
 
         //Get the member IDs from the current VoiceStates
-        const members = Object.keys(this.getVoiceStatesForChannel(curChannel.id));
-        if (curChannel && members)
-            return { channel: curChannel, members, count: members.length, managed };
+        const userIDs = Object.keys(this.getVoiceStatesForChannel(curChannel.id));
+        if (curChannel && userIDs)
+            return { channel: curChannel, userIDs, count: userIDs.length, managed };
 
         //If nothing; null
         return null;
     }
 
-    move(channel, curChannelData) {
-        let delay = config.constants.setChannelDelay;
-
-        if (curChannelData.count > config.constants.apiAlertCount) {
-            BdApi.alert("API Alert",
-                `Moving this many people increases delay per moved user to avoid API spam.
-
-Keep in mind that abuse (too many people at once) can get you banned for "selfbotting".`);
-            delay *= config.constants.delayMultiplication;
+    async move(channel, curChannelData) {
+        //Make delay a promise that takes miliseconds.
+        const delay = ms => new Promise(cmd => setTimeout(cmd, ms));
+        //Predefine user and index
+        let userID, i = 0;
+        //As long as we have a user
+        while (userID = curChannelData.userIDs.shift()) {
+            //increase the index after returning
+            if (i++)
+                //Await the timeout
+                //   Defined standard delay times (at least) 1 +    root of index times a chance of 0
+                await delay(config.constants.setChannelDelay * (1 + Math.sqrt(i) * Math.random()));
+            //Make sure that what we want to move is still present after the delay
+            while (userID && !Object.keys(this.getVoiceStatesForChannel(curChannelData.channel.id)).includes(userID))
+                //Shift us a new one if not
+                userID = curChannelData.userIDs.shift();
+            //If we have a user
+            if (userID)
+                //Set the new channel
+                //               in what guild     who     to where
+                this.setChannel(channel.guild_id, userID, channel.id);
         }
-
-        for (const member of curChannelData.members)
-            //                                in what guild     who     to where
-            setTimeout(() => this.setChannel(channel.guild_id, member, channel.id),
-                delay);
     }
 
     renderElement(channel, curChannelData) {
